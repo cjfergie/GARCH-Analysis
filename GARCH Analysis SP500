@@ -1,0 +1,900 @@
+rm(list = ls())
+
+library("AER")
+library("ggplot2")
+library("sandwich")
+library("stargazer")
+library("survival")
+library("plm")
+#library("margins")
+library("readxl")
+library("xts")
+library("dynlm")
+library("zoo")
+library("urca")
+library("strucchange")
+library("orcutt")
+library("fGarch")
+library("quantmod")
+library("tidyr")
+library("tseries")
+library("pracma")
+
+
+setwd("C:/Users/cferg/OneDrive/Documents/Asset Markets/R Tests")
+
+getSymbols("^GSPC", src = "yahoo", from = 0, to = Sys.Date())#timeline from 1976::2024
+
+# calculating percent returns
+# these are already xts format 
+sp500_perc_ret <- (diff(GSPC$GSPC.Adjusted)/lag(GSPC$GSPC.Adjusted))*100
+sp500_perc_ret <- sp500_perc_ret[-1] #removing first NA
+
+# checking for NAs
+print(sum(is.na(sp500_perc_ret)))# = zero NAs
+
+# creating sub timeline 2008::2009
+# xts format continues
+sub_sp500_perc_ret <- sp500_perc_ret["2008::2009"]
+
+#garch fitting to time series
+garch_sp500_ret <- garchFit(~ arma(1,1) + garch(1,0), data = sub_sp500_perc_ret, trace = F)
+summary(garch_sp500_ret)
+
+#Considering model's prediction of actual value of percentage change
+# 2008::2009
+fitted_garch_sp500_ret <- garch_sp500_ret@fitted
+class(fitted_garch_sp500_ret)# numeric
+# unable to work in numeric. 
+# further formatting required.
+
+#Converting to data frame and then to xts
+df_fitted_garch_sp500_ret <- data.frame(Date = names(fitted_garch_sp500_ret),
+                                        Value = fitted_garch_sp500_ret)
+
+df_fitted_garch_sp500_ret$Date <- as.Date(df_fitted_garch_sp500_ret$Date)#converted date column to date class
+dates <- df_fitted_garch_sp500_ret$Date
+
+dates_1 <- df_fitted_garch_sp500_ret$Date[-1]## to be used later on
+
+xts_fitted_garch_sp500_ret <- xts(df_fitted_garch_sp500_ret$Value,
+                                  order.by = df_fitted_garch_sp500_ret$Date)
+
+plot(as.zoo(xts_fitted_garch_sp500_ret),
+     col = "steelblue",
+     lwd = 0.5)
+abline(0,0)
+
+
+# demean tests 2008::2009
+#_______________________________________________________________________________
+
+# computing deviations of percentage changes from their mean
+demean_sub_sp500_ret <- sub_sp500_perc_ret - garch_sp500_ret@fit$coef[1]
+# View(demean_sub_sp500_ret)#xts object
+
+#The demean_sub_sp500_ret_pcsd time series indicates the mean estimated by our model, 
+#plus the conditional standard error: this is our model fit of the 
+#conditional standard error at a given time, based on other values
+demean_sub_sp500_ret_pcsd <- garch_sp500_ret@fit$coef[1] + garch_sp500_ret@sigma.t
+length(demean_sub_sp500_ret_pcsd)
+
+#The demean_sub_sp500_ret_mcsd time series indicates the mean estimated by our model, 
+#plus the conditional standard error: this is our model fit of the 
+#conditional standard error at a given time, based on other values
+demean_sub_sp500_ret_mcsd <- garch_sp500_ret@fit$coef[1] - garch_sp500_ret@sigma.t
+
+
+#Together, the plus/minus one conditional standard error gives a confidence 
+#interval for the predicted volatility of the time series.
+
+#Converting these into xts objects:
+demean_sub_sp500_ret # already an xts object
+demean_sub_sp500_ret_pcsd_xts <- xts(demean_sub_sp500_ret_pcsd, dates)
+demean_sub_sp500_ret_mcsd_xts <- xts(demean_sub_sp500_ret_mcsd, dates)
+
+# Plotting
+plot(as.zoo(demean_sub_sp500_ret), 
+     type = "l", 
+     col = "steelblue",
+     ylab = "Percent", 
+     xlab = "Date",
+     main = "ARMA(1,1)-GARCH(1,0) \n Estimated Bands of +- One Conditional Standard Deviation",
+     lwd = 0.2,
+)
+  # add horizontal line at y = 0
+abline(0, 0)
+# add GARCH confidence bands (one standard deviation) to the plot
+lines(as.zoo(demean_sub_sp500_ret_pcsd_xts), 
+      col = "darkred", 
+      lwd = 0.5)
+lines(as.zoo(demean_sub_sp500_ret_mcsd_xts), 
+      col = "orange", 
+      lwd = 0.5)
+legend("topright",
+       lty = c(1, 1),
+       lwd = c(0.5, 0.5),
+       cex = 0.7,
+       col = c("steelblue", "darkred"),
+       legend = c("Actual Percentage Change", "+/- Conditional Standard Deviation"))
+
+## from the graph spikes within the demeaned pcsd and mcsd indicated shifts
+## in percentage returns above +/- 1 sd.
+
+#_______________________________________________________________________________
+
+# Fitting a new model to the data specifying the type of ARMA model to be used and
+# the GARCH model to be used to model conditional heteroskedasticity in the data
+# beginning from 1970::2024
+garch_sp500_ret_2 <- garchFit(~ arma(1,1) + garch(1,1), data = sp500_perc_ret,
+                              trace = F)
+summary(garch_sp500_ret_2)
+
+# All coefficients under the error analysis are statistically significant 
+# at the 0.0001 level of significance.
+
+# Predicting the actual value of percentage change:
+fitted_garch_sp500_ret_2 <- garch_sp500_ret_2@fitted
+
+# Converting to data frame and then to xts object
+df_fitted_garch_sp500_ret_2 <- data.frame(Date = names(fitted_garch_sp500_ret_2),
+                                          Value = fitted_garch_sp500_ret_2)
+
+df_fitted_garch_sp500_ret_2$Date <- as.Date(df_fitted_garch_sp500_ret_2$Date)
+
+dates_2 <- df_fitted_garch_sp500_ret_2$Date
+
+xts_fitted_garch_sp500_ret_2 <- xts(df_fitted_garch_sp500_ret_2$Value,
+                                    order.by = df_fitted_garch_sp500_ret_2$Date)
+
+
+# focuising on 2008::2009
+sp500_perc_ret_08_09 <- sp500_perc_ret["2008::2009"]
+xts_fitted_garch_sp500_ret_2_08_09 <- xts_fitted_garch_sp500_ret_2["2009::2009"]
+
+# computing deviations of mean
+demean_sp500_ret_2 <- sp500_perc_ret - garch_sp500_ret_2@fit$coef[1]# xts object
+
+demean_sp500_ret_pcsd_2 <- garch_sp500_ret_2@fit$coef[1] + garch_sp500_ret_2@sigma.t
+demean_sp500_ret_mcsd_2 <- garch_sp500_ret_2@fit$coef[1] - garch_sp500_ret_2@sigma.t
+
+# Converting to xts objects
+
+demean_sp500_ret_pcsd_2_xts <- xts(demean_sp500_ret_pcsd_2, dates_2)
+demean_sp500_ret_mcsd_2_xts <- xts(demean_sp500_ret_mcsd_2, dates_2)
+demean_sp500_ret_2 # xts object
+
+# focusing on 2008::2009
+demean_sp500_ret_2_0809 <- demean_sp500_ret_2["2008::2009"]
+demean_sp500_ret_pcsd_2_xts_0809 <- demean_sp500_ret_pcsd_2_xts["2008::2009"]
+demean_sp500_ret_mcsd_2_xts_0809 <- demean_sp500_ret_mcsd_2_xts["2008::2009"]
+
+# Plotting for 2008::2009
+plot(as.zoo(demean_sp500_ret_2_0809), 
+     type =  "l", 
+     col = "steelblue", 
+     ylab = "Percent", 
+     xlab = "Date", 
+     main = "ARMA(1,1), GARCH(1,1) \n Estimated Bands +- One Conditional Standard Deviation", 
+     lwd = 0.2)
+abline(0, 0)
+lines(as.zoo(demean_sp500_ret_pcsd_2_xts_0809), 
+      col = "darkred", 
+      lwd = 0.2)
+lines(as.zoo(demean_sp500_ret_mcsd_2_xts_0809), 
+      col = "darkred", 
+      lwd = 0.2)
+legend("topright",
+       lty = c(1, 1, 1),
+       lwd = c(0.5, 0.5, 0.5),
+       cex = 0.7,
+       col = c("steelblue", "darkred", "orange"),
+       legend = c("Actual Percentage Change", "+/- Conditional Standard Deviation"))
+lines(as.zoo(demean_sub_sp500_ret_pcsd_xts),
+      col = "orange",
+      lwd = 0.2)
+lines(as.zoo(demean_sub_sp500_ret_mcsd_xts),
+      col = "orange",
+      lwd = 0.2)
+#_______________________________________________________________________________
+
+#Fitting an ARMA(3,3) to our model and GARCH(3,3) to for conditional heteroskedasticity
+garch_sp500_ret_3 <- garchFit(~ arma(3,3) + garch(3,3), data = sub_sp500_perc_ret, trace = F)
+summary(garch_sp500_ret_3)
+
+# predicyting the actual value of percentage change fitting 
+fitted_garch_sp500_ret_3 <- garch_sp500_ret_3@fitted
+
+# Converting to data frame and then xts
+df_fitted_garch_sp500_ret_3 <- data.frame(Date = names(fitted_garch_sp500_ret_3),
+                                      Value = fitted_garch_sp500_ret_3)
+
+df_fitted_garch_sp500_ret_3$Date <- as.Date(df_fitted_garch_sp500_ret_3$Date)
+
+dates_3 <- df_fitted_garch_sp500_ret_3$Date
+
+xts_fitted_sp500_ret_3 <- xts(df_fitted_garch_sp500_ret_3, dates_3)
+
+
+# demean test 2008::2009
+#_______________________________________________________________________________
+demean_sp500_ret_3 <- sub_sp500_perc_ret - garch_sp500_ret_3@fit$coef[1]
+
+demean_sp500_ret_pcsd_3 <- garch_sp500_ret_3@fit$coef[1] + garch_sp500_ret_3@sigma.t
+demean_sp500_ret_mcsd_3 <- garch_sp500_ret_3@fit$coef[1] - garch_sp500_ret_3@sigma.t
+
+# Converting to xts object
+demean_sp500_ret_pcsd_3_xts <- xts(demean_sp500_ret_pcsd_3, dates_3)
+demean_sp500_ret_mcsd_3_xts <- xts(demean_sp500_ret_mcsd_3, dates_3)
+demean_sp500_ret_3 # xts object
+
+# Plotting
+plot(as.zoo(demean_sp500_ret_3), 
+     type = "l", 
+     col = "steelblue",
+     ylab = "Percent", 
+     xlab = "Date",
+     main = "ARMA(1,1)-GARCH(1,0) \n Estimated Bands of +- One Conditional Standard Deviation",
+     lwd = 0.2,
+)
+# add horizontal line at y = 0
+abline(0, 0)
+# add GARCH confidence bands (one standard deviation) to the plot
+lines(as.zoo(demean_sp500_ret_pcsd_3_xts), 
+      col = "darkred", 
+      lwd = 0.5)
+lines(as.zoo(demean_sp500_ret_mcsd_3_xts), 
+      col = "darkred", 
+      lwd = 0.5)
+lines(as.zoo(demean_sub_sp500_ret_pcsd_xts),
+      col = "green",
+      lwd = 0.5)
+lines(as.zoo(demean_sub_sp500_ret_mcsd_xts),
+      col = "green",
+      lwd = 0.5)
+lines(as.zoo(demean_sp500_ret_pcsd_2_xts_0809),
+      col = "black",
+      lwd = 0.5)
+lines(as.zoo(demean_sp500_ret_mcsd_2_xts_0809),
+      col = "black",
+      lwd = 0.5)
+legend("topright",
+       lty = c(1, 1),
+       lwd = c(0.5, 0.5),
+       cex = 0.7,
+       col = c("steelblue", "darkred"),
+       legend = c("Actual Percentage Change", "+/- Conditional Standard Deviation"))
+
+#_______________________________________________________________________________
+
+# Mapping Peaks and Troughs for + One Conditional Standard Deviation
+#_______________________________________________________________________________
+#
+#
+#
+plot(as.zoo(demean_sub_sp500_ret), 
+     type = "l", 
+     col = "steelblue",
+     ylab = "Percent", 
+     xlab = "Date",
+     main = "ARMA(1,1)-GARCH(1,0) \n Estimated Bands of +- One Conditional Standard Deviation",
+     lwd = 0.2,
+)
+# add horizontal line at y = 0
+abline(0, 0)
+# add GARCH confidence bands (one standard deviation) to the plot
+lines(as.zoo(demean_sub_sp500_ret_pcsd_xts), 
+      col = "darkred", 
+      lwd = 0.5)
+lines(as.zoo(demean_sub_sp500_ret_mcsd_xts), 
+      col = "orange", 
+      lwd = 0.5)
+legend("topright",
+       lty = c(1, 1),
+       lwd = c(0.5, 0.5),
+       cex = 0.7,
+       col = c("steelblue", "darkred"),
+       legend = c("Actual Percentage Change", "+/- Conditional Standard Deviation"))
+
+#_______________________________________________________________________________
+
+library(zoo)
+library(TTR)  # For the findPeaks function
+
+# Identify local minima (troughs) in demean_sub_sp500_ret_pcsd_xts
+find_troughs <- function(series) {
+  # Invert the series to use findPeaks to find troughs
+  inverted_series <- -series
+  troughs <- findPeaks(inverted_series, thresh = 0)
+  return(troughs)
+}
+
+# Plot the original data
+plot(as.zoo(demean_sub_sp500_ret), 
+     type = "l", 
+     col = "steelblue",
+     ylab = "Percent", 
+     xlab = "Date",
+     main = "ARMA(1,1)-GARCH(1,0) \n Estimated Bands of +- One Conditional Standard Deviation",
+     lwd = 0.2
+)
+
+# Add horizontal line at y = 0
+abline(h = 0)
+abline(h = 2.378156)
+abline(h = 1.703751)
+# ______________________________________________________________________________
+#
+#
+# For Peaks
+# Add the GARCH confidence bands (one standard deviation) to the plot
+lines(as.zoo(demean_sub_sp500_ret_pcsd_xts), 
+      col = "darkred", 
+      lwd = 0.5)
+lines(as.zoo(demean_sub_sp500_ret_mcsd_xts), 
+      col = "orange", 
+      lwd = 0.5)
+
+# Add a legend
+legend("topright",
+       lty = c(1, 1),
+       lwd = c(0.5, 0.5),
+       cex = 0.7,
+       col = c("steelblue", "darkred", "orange"),
+       legend = c("Actual Percentage Change", "+/- Conditional Standard Deviation"))
+
+# Find troughs in demean_sub_sp500_ret_pcsd_xts
+trough_indices <- find_troughs(demean_sub_sp500_ret_pcsd_xts)
+trough_dates <- index(demean_sub_sp500_ret_pcsd_xts)[trough_indices]
+trough_values <- coredata(demean_sub_sp500_ret_pcsd_xts)[trough_indices]
+View(trough_values)
+# Add a line connecting the troughs
+lines(trough_dates, trough_values, col = "purple", lwd = 1.5)
+
+# Highlight the troughs
+points(trough_dates, trough_values, col = "purple", pch = 19)
+
+mean(trough_values)
+#
+#_______________________________________________________________________________
+
+# For troughs 
+# Ensure necessary packages are loaded
+library(zoo)
+library(quantmod)  # For the findPeaks function
+
+# Function to identify local minima (troughs)
+find_troughs <- function(series, span = 3) {
+  rollapply(series, span, function(x) which.min(x) == (span %/% 2 + 1), align = "center", fill = NA)
+}
+
+# Plot the original data
+plot(as.zoo(demean_sub_sp500_ret), 
+     type = "l", 
+     col = "steelblue",
+     ylab = "Percent", 
+     xlab = "Date",
+     main = "ARMA(1,1)-GARCH(1,0) \n Estimated Bands of +- One Conditional Standard Deviation",
+     lwd = 0.2
+)
+
+# Add horizontal line at y = 0
+abline(h = 0)
+
+# Add the GARCH confidence bands (one standard deviation) to the plot
+lines(as.zoo(demean_sub_sp500_ret_pcsd_xts), 
+      col = "darkred", 
+      lwd = 0.5)
+lines(as.zoo(demean_sub_sp500_ret_mcsd_xts), 
+      col = "orange", 
+      lwd = 0.5)
+
+# Add a legend
+legend("topright",
+       lty = c(1, 1),
+       lwd = c(0.5, 0.5),
+       cex = 0.7,
+       col = c("steelblue", "darkred", "orange"),
+       legend = c("Actual Percentage Change", "+/- Conditional Standard Deviation"))
+
+# Find troughs in demean_sub_sp500_ret_pcsd_xts
+troughs <- find_troughs(demean_sub_sp500_ret_pcsd_xts, span = 5)
+trough_dates <- index(demean_sub_sp500_ret_pcsd_xts)[troughs]
+trough_values <- coredata(demean_sub_sp500_ret_pcsd_xts)[troughs]
+
+# Remove NA values
+trough_dates <- trough_dates[!is.na(trough_dates)]
+trough_values <- trough_values[!is.na(trough_values)]
+mean(trough_values)
+
+# Add a line connecting the troughs
+lines(trough_dates, trough_values, col = "purple", lwd = 1.5)
+
+# Highlight the troughs
+points(trough_dates, trough_values, col = "purple", pch = 19)
+#
+#
+#_______________________________________________________________________________
+
+# Threshold value
+threshold <- 2.378156
+
+# Identify conditional standard deviations over the threshold
+exceed_threshold <- demean_sub_sp500_ret_pcsd_xts > threshold
+exceed_dates <- index(demean_sub_sp500_ret_pcsd_xts)[exceed_threshold]
+exceed_values <- coredata(demean_sub_sp500_ret_pcsd_xts)[exceed_threshold]
+
+# Plot points where the standard deviation exceeds the threshold
+points(exceed_dates, exceed_values, col = "red", pch = 19)
+
+# Calculate the significance
+total_points <- length(demean_sub_sp500_ret_pcsd_xts)
+points_above_threshold <- sum(exceed_threshold, na.rm = TRUE)
+significance <- points_above_threshold / total_points
+
+# Print significance result
+cat("Significance level of points above the threshold:", significance, "\n")
+
+# Draw the threshold line
+abline(h = threshold, col = "green", lwd = 1.5)
+
+# Check if the significance exceeds 5%
+if (significance > 0.05) {
+  cat("The proportion of time the conditional standard deviation is above the threshold is significant at the 5% level.\n")
+} else {
+  cat("The proportion of time the conditional standard deviation is above the threshold is not significant at the 5% level.\n")
+}
+#
+#_______________________________________________________________________________
+#
+# Idenitfying consecutive periods above 2.378156
+#
+# Ensure necessary packages are loaded
+library(zoo)
+library(TTR)  # For the findPeaks function
+
+# Define threshold
+threshold <- 2.378156
+
+# Function to find the lengths of consecutive periods above the threshold
+find_consecutive_periods <- function(series, threshold) {
+  series_vector <- as.numeric(coredata(series))
+  above_threshold <- series_vector > threshold
+  rle_result <- rle(above_threshold)
+  lengths <- rle_result$lengths
+  values <- rle_result$values
+  return(list(lengths = lengths, values = values))
+}
+
+# Function to find the start and end dates of the most consecutive periods
+find_period_dates <- function(series, lengths, values) {
+  max_length <- max(lengths[values])
+  max_indices <- which(lengths == max_length & values)
+  
+  periods <- list()
+  for (i in 1:length(max_indices)) {
+    start_idx <- sum(lengths[1:(max_indices[i] - 1)]) + 1
+    end_idx <- start_idx + max_length - 1
+    periods[[i]] <- list(
+      start_date = index(series)[start_idx],
+      end_date = index(series)[end_idx]
+    )
+  }
+  return(periods)
+}
+
+# Identify conditional standard deviations over the threshold
+exceed_threshold <- demean_sub_sp500_ret_pcsd_xts > threshold
+exceed_dates <- index(demean_sub_sp500_ret_pcsd_xts)[exceed_threshold]
+exceed_values <- coredata(demean_sub_sp500_ret_pcsd_xts)[exceed_threshold]
+
+# Plot the original data
+plot(as.zoo(demean_sub_sp500_ret), 
+     type = "l", 
+     col = "steelblue",
+     ylab = "Percent", 
+     xlab = "Date",
+     main = "ARMA(1,1)-GARCH(1,0) \n Estimated Bands of +- One Conditional Standard Deviation",
+     lwd = 0.2
+)
+
+# Add horizontal line at y = 0
+abline(h = 0)
+
+# Add the GARCH confidence bands (one standard deviation) to the plot
+lines(as.zoo(demean_sub_sp500_ret_pcsd_xts), 
+      col = "darkred", 
+      lwd = 0.5)
+lines(as.zoo(demean_sub_sp500_ret_mcsd_xts), 
+      col = "orange", 
+      lwd = 0.5)
+
+# Add a legend
+legend("topright",
+       lty = c(1, 1),
+       lwd = c(0.5, 0.5),
+       cex = 0.7,
+       col = c("steelblue", "darkred", "orange"),
+       legend = c("Actual Percentage Change", "+/- Conditional Standard Deviation"))
+
+# Draw the threshold line
+abline(h = threshold, col = "green", lwd = 1.5)
+
+# Find consecutive periods above the threshold
+consecutive_periods <- find_consecutive_periods(demean_sub_sp500_ret_pcsd_xts, threshold)
+periods <- find_period_dates(demean_sub_sp500_ret_pcsd_xts, consecutive_periods$lengths, consecutive_periods$values)
+
+# Print the periods
+cat("Most consecutive periods where the conditional standard deviation exceeds", threshold, ":\n")
+for (i in 1:length(periods)) {
+  cat("Period", i, ": from", periods[[i]]$start_date, "to", periods[[i]]$end_date, "\n")
+}
+
+# Print the periods
+cat("Most consecutive periods where the conditional standard deviation exceeds", threshold, ":\n")
+for (i in 1:length(periods)) {
+  cat("Period", i, ": from", as.character(periods[[i]]$start_date), "to", as.character(periods[[i]]$end_date), "\n")
+}# Period 1 : from 2008-10-03 to 2008-10-16 
+
+#_______________________________________________________________________________
+
+library(zoo)
+library(TTR)  # For the findPeaks function
+
+# Define threshold
+threshold <- 2.378156
+
+# Function to find the lengths of consecutive periods above the threshold
+find_consecutive_periods <- function(series, threshold) {
+  series_vector <- as.numeric(coredata(series))
+  above_threshold <- series_vector > threshold
+  rle_result <- rle(above_threshold)
+  lengths <- rle_result$lengths
+  values <- rle_result$values
+  return(list(lengths = lengths, values = values))
+}
+
+# Function to find the start and end dates of the most consecutive periods
+find_period_dates <- function(series, lengths, values) {
+  max_length <- max(lengths[values])
+  max_indices <- which(lengths == max_length & values)
+  
+  periods <- list()
+  for (i in 1:length(max_indices)) {
+    start_idx <- sum(lengths[1:(max_indices[i] - 1)]) + 1
+    end_idx <- start_idx + max_length - 1
+    periods[[i]] <- list(
+      start_date = index(series)[start_idx],
+      end_date = index(series)[end_idx],
+      values = coredata(series)[start_idx:end_idx]
+    )
+  }
+  return(periods)
+}
+
+# Identify conditional standard deviations over the threshold
+exceed_threshold <- demean_sub_sp500_ret_pcsd_xts > threshold
+exceed_dates <- index(demean_sub_sp500_ret_pcsd_xts)[exceed_threshold]
+exceed_values <- coredata(demean_sub_sp500_ret_pcsd_xts)[exceed_threshold]
+
+# Plot the original data
+plot(as.zoo(demean_sub_sp500_ret), 
+     type = "l", 
+     col = "steelblue",
+     ylab = "Percent", 
+     xlab = "Date",
+     main = "ARMA(1,1)-GARCH(1,0) \n Estimated Bands of +- One Conditional Standard Deviation",
+     lwd = 0.2
+)
+
+# Add horizontal line at y = 0
+abline(h = 0)
+
+# Add GARCH confidence bands (one standard deviation) to the plot
+lines(as.zoo(demean_sub_sp500_ret_pcsd_xts), 
+      col = "darkred", 
+      lwd = 0.5)
+lines(as.zoo(demean_sub_sp500_ret_mcsd_xts), 
+      col = "orange", 
+      lwd = 0.5)
+
+# Add a legend
+legend("topright",
+       lty = c(1, 1),
+       lwd = c(0.5, 0.5),
+       cex = 0.7,
+       col = c("steelblue", "darkred", "orange"),
+       legend = c("Actual Percentage Change", "+/- Conditional Standard Deviation"))
+
+# Draw threshold line
+abline(h = threshold, col = "green", lwd = 1.5)
+
+# Find consecutive periods above the threshold
+consecutive_periods <- find_consecutive_periods(demean_sub_sp500_ret_pcsd_xts, threshold)
+periods <- find_period_dates(demean_sub_sp500_ret_pcsd_xts, consecutive_periods$lengths, consecutive_periods$values)
+
+# Print periods and their values
+cat("Most consecutive periods where the conditional standard deviation exceeds", threshold, ":\n")
+for (i in 1:length(periods)) {
+  cat("Period", i, ": from", as.character(periods[[i]]$start_date), "to", as.character(periods[[i]]$end_date), "\n")
+  cat("Values:\n")
+  print(periods[[i]]$values)
+  cat("\n")
+}
+
+#_______________________________________________________________________________
+
+
+library(zoo)
+library(TTR)  # For the findPeaks function
+
+# Define threshold
+threshold <- 2.378156
+
+# Function to find the lengths of consecutive periods above the threshold
+find_consecutive_periods <- function(series, threshold) {
+  series_vector <- as.numeric(coredata(series))
+  above_threshold <- series_vector > threshold
+  rle_result <- rle(above_threshold)
+  lengths <- rle_result$lengths
+  values <- rle_result$values
+  return(list(lengths = lengths, values = values))
+}
+
+# Function to find the start and end dates of the most consecutive periods
+find_period_dates <- function(series, lengths, values) {
+  max_length <- max(lengths[values])
+  max_indices <- which(lengths == max_length & values)
+  
+  periods <- list()
+  for (i in 1:length(max_indices)) {
+    start_idx <- sum(lengths[1:(max_indices[i] - 1)]) + 1
+    end_idx <- start_idx + max_length - 1
+    periods[[i]] <- list(
+      start_date = index(series)[start_idx],
+      end_date = index(series)[end_idx],
+      dates = index(series)[start_idx:end_idx],
+      values = coredata(series)[start_idx:end_idx]
+    )
+  }
+  return(periods)
+}
+
+# Identify conditional standard deviations over the threshold
+exceed_threshold <- demean_sub_sp500_ret_pcsd_xts > threshold
+exceed_dates <- index(demean_sub_sp500_ret_pcsd_xts)[exceed_threshold]
+exceed_values <- coredata(demean_sub_sp500_ret_pcsd_xts)[exceed_threshold]
+
+# Plot the original data
+plot(as.zoo(demean_sub_sp500_ret), 
+     type = "l", 
+     col = "steelblue",
+     ylab = "Percent", 
+     xlab = "Date",
+     main = "ARMA(1,1)-GARCH(1,0) \n Estimated Bands of +- One Conditional Standard Deviation",
+     lwd = 0.2
+)
+
+# Add horizontal line at y = 0
+abline(h = 0)
+
+# Add the GARCH confidence bands (one standard deviation) to the plot
+lines(as.zoo(demean_sub_sp500_ret_pcsd_xts), 
+      col = "darkred", 
+      lwd = 0.5)
+lines(as.zoo(demean_sub_sp500_ret_mcsd_xts), 
+      col = "orange", 
+      lwd = 0.5)
+
+# Add a legend
+legend("topright",
+       lty = c(1, 1),
+       lwd = c(0.5, 0.5),
+       cex = 0.7,
+       col = c("steelblue", "darkred", "orange"),
+       legend = c("Actual Percentage Change", "+/- Conditional Standard Deviation"))
+
+# Draw the threshold line
+abline(h = threshold, col = "green", lwd = 1.5)
+
+# Find consecutive periods above the threshold
+consecutive_periods <- find_consecutive_periods(demean_sub_sp500_ret_pcsd_xts, threshold)
+periods <- find_period_dates(demean_sub_sp500_ret_pcsd_xts, consecutive_periods$lengths, consecutive_periods$values)
+
+# Print the periods and their values
+cat("Most consecutive periods where the conditional standard deviation exceeds", threshold, ":\n")
+for (i in 1:length(periods)) {
+  cat("Period", i, ": from", as.character(periods[[i]]$start_date), "to", as.character(periods[[i]]$end_date), "\n")
+  cat("Values:\n")
+  print(data.frame(Date = periods[[i]]$dates, Value = periods[[i]]$values))
+  cat("\n")
+}
+
+chartSeries(GSPC["2008::2009"], type = c("candlesticks"))
+
+chart
+
+#_______________________________________________________________________________
+
+# Add the periods as annotations
+for (i in 1:length(periods)) {
+  addTA(xts(periods[[i]]$values, order.by = periods[[i]]$dates), on = 1, col = "red", lwd = 2)
+}
+
+
+# Plot the candlestick chart for the specified date range
+chartSeries(GSPC["2008::2009"], type = "candlesticks")
+
+# Add the periods as annotations
+for (i in 1:length(periods)) {
+  period_data <- xts(periods[[i]]$values, order.by = periods[[i]]$dates)
+  addTA(period_data, on = 1, col = "red", lwd = 2, type = "p")
+}
+
+#_______________________________________________________________________________
+
+plot(as.zoo(GSPC$GSPC.Adjusted["2008::2009"]),
+     col = "steelblue",
+     xlab = "Time",
+     ylab = "Adjusted",
+     lwd = 0.5)
+lines(as.zoo(demean_sub_sp500_ret_pcsd_xts),
+      col = "darkred",
+      lwd = 0.5)
+
+#_______________________________________________________________________________
+
+# Identifying Period of Volatility
+
+#_______________________________________________________________________________
+library(zoo)
+library(TTR)  # For the findPeaks function
+library(quantmod)
+
+
+getSymbols("GSPC", src = "yahoo", from = "2008-01-01", to = "2010-01-01")
+
+# Define threshold
+threshold <- 2.378156
+
+# Function to find the lengths of consecutive periods above the threshold
+find_consecutive_periods <- function(series, threshold) {
+  series_vector <- as.numeric(coredata(series))
+  above_threshold <- series_vector > threshold
+  rle_result <- rle(above_threshold)
+  lengths <- rle_result$lengths
+  values <- rle_result$values
+  return(list(lengths = lengths, values = values))
+}
+
+# Function to find the start and end dates of the most consecutive periods
+find_period_dates <- function(series, lengths, values) {
+  max_length <- max(lengths[values])
+  max_indices <- which(lengths == max_length & values)
+  
+  periods <- list()
+  for (i in 1:length(max_indices)) {
+    start_idx <- sum(lengths[1:(max_indices[i] - 1)]) + 1
+    end_idx <- start_idx + max_length - 1
+    periods[[i]] <- list(
+      start_date = index(series)[start_idx],
+      end_date = index(series)[end_idx],
+      dates = index(series)[start_idx:end_idx],
+      values = coredata(series)[start_idx:end_idx]
+    )
+  }
+  return(periods)
+}
+
+# Identifying conditional standard deviations over the threshold
+exceed_threshold <- demean_sub_sp500_ret_pcsd_xts > threshold
+exceed_dates <- index(demean_sub_sp500_ret_pcsd_xts)[exceed_threshold]
+exceed_values <- coredata(demean_sub_sp500_ret_pcsd_xts)[exceed_threshold]
+
+# Finding consecutive periods above the threshold
+consecutive_periods <- find_consecutive_periods(demean_sub_sp500_ret_pcsd_xts, threshold)
+periods <- find_period_dates(demean_sub_sp500_ret_pcsd_xts, consecutive_periods$lengths, consecutive_periods$values)
+
+# Print periods and their values
+cat("Most consecutive periods where the conditional standard deviation exceeds", threshold, ":\n")
+for (i in 1:length(periods)) {
+  cat("Period", i, ": from", as.character(periods[[i]]$start_date), "to", as.character(periods[[i]]$end_date), "\n")
+  cat("Values:\n")
+  print(data.frame(Date = periods[[i]]$dates, Value = periods[[i]]$values))
+  cat("\n")
+}
+
+# Extract adjusted closing prices for the specified date range
+adj_close <- GSPC$GSPC.Adjusted["2008::2009"]
+
+# Plot adjusted closing prices
+plot(as.zoo(adj_close), col = "steelblue", lwd = 0.5, xlab = "Time", ylab = "Adjusted Closing Price")
+
+# Overlay the periods as points
+for (i in 1:length(periods)) {
+  period_dates <- periods[[i]]$dates
+  period_values <- adj_close[period_dates]
+  points(period_dates, period_values, col = "red", pch = 19)
+}
+
+# Add a horizontal line at the threshold value for reference
+abline(h = threshold, col = "green", lwd = 1.5)
+#
+#_______________________________________________________________________________
+
+# P2: Attempting further
+library(zoo)
+library(TTR)  # For the findPeaks function
+library(quantmod)
+
+getSymbols("GSPC", src = "yahoo", from = "2008-01-01", to = "2010-01-01")
+
+# Define threshold
+threshold <- 2.378156
+
+# Function to find the lengths of consecutive periods above the threshold
+find_consecutive_periods <- function(series, threshold) {
+  series_vector <- as.numeric(coredata(series))
+  above_threshold <- series_vector > threshold
+  rle_result <- rle(above_threshold)
+  lengths <- rle_result$lengths
+  values <- rle_result$values
+  return(list(lengths = lengths, values = values))
+}
+
+# Function to find the start and end dates of the most consecutive periods
+find_period_dates <- function(series, lengths, values) {
+  max_length <- max(lengths[values])
+  max_indices <- which(lengths == max_length & values)
+  
+  periods <- list()
+  for (i in 1:length(max_indices)) {
+    start_idx <- sum(lengths[1:(max_indices[i] - 1)]) + 1
+    end_idx <- start_idx + max_length - 1
+    periods[[i]] <- list(
+      start_date = index(series)[start_idx],
+      end_date = index(series)[end_idx],
+      dates = index(series)[start_idx:end_idx],
+      values = coredata(series)[start_idx:end_idx]
+    )
+  }
+  return(periods)
+}
+
+# Identifying conditional standard deviations over the threshold
+exceed_threshold <- demean_sub_sp500_ret_pcsd_xts > threshold
+exceed_dates <- index(demean_sub_sp500_ret_pcsd_xts)[exceed_threshold]
+exceed_values <- coredata(demean_sub_sp500_ret_pcsd_xts)[exceed_threshold]
+
+# Finding consecutive periods above the threshold
+consecutive_periods <- find_consecutive_periods(demean_sub_sp500_ret_pcsd_xts, threshold)
+periods <- find_period_dates(demean_sub_sp500_ret_pcsd_xts, consecutive_periods$lengths, consecutive_periods$values)
+
+# Print periods and their values
+cat("Most consecutive periods where the conditional standard deviation exceeds", threshold, ":\n")
+for (i in 1:length(periods)) {
+  cat("Period", i, ": from", as.character(periods[[i]]$start_date), "to", as.character(periods[[i]]$end_date), "\n")
+  cat("Values:\n")
+  print(data.frame(Date = periods[[i]]$dates, Value = periods[[i]]$values))
+  cat("\n")
+}
+
+# Extract adjusted closing prices for the specified date range
+adj_close <- GSPC$GSPC.Adjusted["2008::2009"]
+
+# Plot adjusted closing prices
+plot(as.zoo(adj_close), col = "steelblue", lwd = 0.5, xlab = "Time", ylab = "Adjusted Closing Price")
+
+# Overlay the periods as lines
+for (i in 1:length(periods)) {
+  period_dates <- periods[[i]]$dates
+  period_values <- adj_close[period_dates]
+  lines(period_dates, period_values, col = "red", lwd = 2)
+}
+
+# Add a horizontal line at the threshold value for reference
+abline(h = threshold, col = "green", lwd = 1.5)
+
+
+
+
